@@ -169,24 +169,26 @@ class OctopusToInflux:
     def _store_consumption(self, measurement: str, consumption: dict, standard_unit_rates, standing_charges, base_tags: [str, str]):
         points = []
         for t, c in consumption.items():
-            usage_cost_exc_vat_pence = standard_unit_rates[t]['value_exc_vat'] * c['consumption']
-            usage_cost_inc_vat_pence = standard_unit_rates[t]['value_inc_vat'] * c['consumption']
-            standing_charge_cost_exc_vat_pence = standing_charges[t]['value_exc_vat'] / (60 * 24 / self._resolution_minutes)
-            standing_charge_cost_inc_vat_pence = standing_charges[t]['value_inc_vat'] / (60 * 24 / self._resolution_minutes)
-            points.append(Point.from_dict({
-                'measurement': measurement,
-                'time': t,
-                'fields': {
-                    'usage_kwh': c['consumption'],
-                    'usage_cost_exc_vat_pence': usage_cost_exc_vat_pence,
-                    'usage_cost_inc_vat_pence': usage_cost_inc_vat_pence,
-                    'standing_charge_cost_exc_vat_pence': standing_charge_cost_exc_vat_pence,
-                    'standing_charge_cost_inc_vat_pence': standing_charge_cost_inc_vat_pence,
-                    'total_cost_exc_vat_pence': usage_cost_exc_vat_pence + standing_charge_cost_exc_vat_pence,
-                    'total_cost_inc_vat_pence': usage_cost_inc_vat_pence + standing_charge_cost_inc_vat_pence,
-                },
-                'tags': {'tariff_code': standard_unit_rates[t]['tariff_code']} | base_tags,
-            }, write_precision=WritePrecision.S))
+            if t in standard_unit_rates and t in standing_charges:
+                # Ensure that the timestamp key is part of this tariff before attempting to add to the DB.
+                usage_cost_exc_vat_pence = standard_unit_rates[t]['value_exc_vat'] * c['consumption']
+                usage_cost_inc_vat_pence = standard_unit_rates[t]['value_inc_vat'] * c['consumption']
+                standing_charge_cost_exc_vat_pence = standing_charges[t]['value_exc_vat'] / (60 * 24 / self._resolution_minutes)
+                standing_charge_cost_inc_vat_pence = standing_charges[t]['value_inc_vat'] / (60 * 24 / self._resolution_minutes)
+                points.append(Point.from_dict({
+                    'measurement': measurement,
+                    'time': t,
+                    'fields': {
+                        'usage_kwh': c['consumption'],
+                        'usage_cost_exc_vat_pence': usage_cost_exc_vat_pence,
+                        'usage_cost_inc_vat_pence': usage_cost_inc_vat_pence,
+                        'standing_charge_cost_exc_vat_pence': standing_charge_cost_exc_vat_pence,
+                        'standing_charge_cost_inc_vat_pence': standing_charge_cost_inc_vat_pence,
+                        'total_cost_exc_vat_pence': usage_cost_exc_vat_pence + standing_charge_cost_exc_vat_pence,
+                        'total_cost_inc_vat_pence': usage_cost_inc_vat_pence + standing_charge_cost_inc_vat_pence,
+                    },
+                    'tags': {'tariff_code': standard_unit_rates[t]['tariff_code']} | base_tags,
+                }, write_precision=WritePrecision.S))
         click.echo(f'Storing {len(points)} points')
         self._influx_write.write(self._influx_bucket, record=points)
 

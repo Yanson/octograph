@@ -91,8 +91,10 @@ class OctopusApiClient:
         product_code, _ = self._extract_product_code(tariff_code)
         product = self._retrieve_product(product_code)
         pricing = {}
-        for link in self._find_links(product, tariff_code):
-            pricing[link['rel']] = self._retrieve_paginated_data(link['href'], from_date, to_date)
+        links = self._find_links(product, tariff_code)
+        if links is not None:
+            for link in links:
+                pricing[link['rel']] = self._retrieve_paginated_data(link['href'], from_date, to_date)
         return pricing
 
     def retrieve_electricity_consumption(self, mpan: str, serial_number: str, from_date: str, to_date: str):
