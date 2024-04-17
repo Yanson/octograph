@@ -92,7 +92,7 @@ class OctopusApiClient:
         product = self._retrieve_product(product_code)
         pricing = {}
         links = self._find_links(product, tariff_code)
-        if links is not None:
+        if links:
             for link in links:
                 pricing[link['rel']] = self._retrieve_paginated_data(link['href'], from_date, to_date)
         return pricing
