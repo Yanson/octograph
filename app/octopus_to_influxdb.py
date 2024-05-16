@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import os
+import asyncio
 from configparser import ConfigParser
 from datetime import datetime, date, timedelta
 
@@ -9,6 +10,8 @@ from influxdb_client import InfluxDBClient
 from influxdb_client.client.write.point import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 from influxdb_client.domain.write_precision import WritePrecision
+from octopus_graphql_api_client import OctopusEnergyApiClient
+from intelligent_dispatches import IntelligentDispatchItem
 
 from app.date_utils import DateUtils
 from app.eco_unit_normaliser import EcoUnitNormaliser
@@ -48,6 +51,10 @@ class OctopusToInflux:
             config.get('octopus', 'cache_dir', fallback='/tmp/octopus_api_cache') if config.getboolean('octopus', 'enable_cache', fallback=False) else None
         )
 
+        self._octopus_ql_api = OctopusEnergyApiClient(
+            os.getenv(config.get('octopus', 'api_key_env_var', fallback='OCTOGRAPH_OCTOPUS_API_KEY'))
+        )
+
         self._influx_bucket = config.get('influxdb', 'bucket', fallback='primary')
         influx_client = InfluxDBClient(
             url=config.get('influxdb', 'url', fallback='http://localhost:8086'),
@@ -56,6 +63,9 @@ class OctopusToInflux:
         )
         self._influx_write = influx_client.write_api(write_options=SYNCHRONOUS)
         self._influx_query = influx_client.query_api()
+
+        self._intelligent_tariff_meter = config.get('octopus', 'intelligent_tariff_meter', fallback=None)
+        self._intelligent_low_rate_hour = config.getint('octopus', 'intelligent_low_rate_hour', fallback=3)
 
         included_meters_str = config.get('octopus', 'included_meters', fallback=None)
         self._included_meters = included_meters_str.split(',') if included_meters_str else None
@@ -68,7 +78,7 @@ class OctopusToInflux:
 
     def find_latest_date(self, measurement: str, field: str, tags: dict[str, str]):
         tf = ' '.join([f' and r["{k}"] == "{v}"' for k, v in tags.items()])
-        f = f'r["_measurement"] == "{measurement}" and r._field == "{field}" {tf})'
+        f = f'r["_measurement"] == "{measurement}" and r._field == "{field}"{tf})'
         q = f'from(bucket: "{self._influx_bucket}") |> range(start: -30d) |> filter(fn: (r) => {f} |> last()'
         r = self._influx_query.query(q)
         l = None
@@ -78,6 +88,30 @@ class OctopusToInflux:
         if not l:
             raise click.ClickException(f'No data found for {measurement} in last 30 days - try back-filling')
         return l
+
+    def _find_intelligent_slots(self, collect_from: datetime, collect_to: datetime, tags: dict[str, str]):
+        field = 'intelligent_slot'
+        measurement = 'intelligent_slots'
+
+        intelligent_slots = []
+
+        tf = ' '.join([f' and r["{k}"] == "{v}"' for k, v in tags.items()])
+        f = f'r["_measurement"] == "{measurement}" and r["account_number"] == "{self._account_number}" and r["_field"] == "{field}"{tf})'
+        q = f'from(bucket: "{self._influx_bucket}") |> range(start: {DateUtils.iso8601(collect_from)}, stop: {DateUtils.iso8601(collect_to)}) |> filter(fn: (r) => {f}'
+        r = self._influx_query.query(q)
+        for table in r:
+            for record in table.records:
+                intelligent_slot = IntelligentDispatchItem(
+                    record.values['start_time'],
+                    record.values['end_time'],
+                    0,
+                    "",
+                    record.values['location'],
+                )
+                intelligent_slots.append(intelligent_slot)
+        for slot in intelligent_slots:
+            print("Found intelligent slot: " + str(slot.start) + " to " + str(slot.end))
+        return intelligent_slots
 
     def collect(self, from_str: str, to_str: str):
         click.echo(f'Collecting data between {from_str} and {to_str}')
@@ -95,6 +129,10 @@ class OctopusToInflux:
         tags = self._additional_tags.copy()
         if 'account_number' in self._included_tags:
             tags['account_number'] = account['number']
+
+        if self._intelligent_tariff_meter is not None:
+            click.echo(f'Collecting recent intelligent slots')
+            self._process_intelligent_slots(self._intelligent_tariff_meter, tags)
 
         for p in account['properties']:
             self._process_property(p, collect_from, collect_to, tags)
@@ -142,6 +180,10 @@ class OctopusToInflux:
             click.echo(f'Could not find pricing for mpan: {emp["mpan"]}')
             standing_charges = {}
 
+        if emp['mpan'] == self._intelligent_tariff_meter and not emp['is_export']:
+            click.echo(f'Checking for intelligent dispatch slots for electricity meter {emp['mpan']}')
+            intelligent_slots = self._find_intelligent_slots(collect_from, collect_to, {'mpan': emp['mpan']})
+            standard_unit_rates = self.apply_intelligent_slots(standard_unit_rates, intelligent_slots, self._intelligent_low_rate_hour)
         self._store_emp_pricing(standard_unit_rates, standing_charges, tags)
 
         for em in emp['meters']:
@@ -157,6 +199,7 @@ class OctopusToInflux:
             tags['meter_serial_number'] = em['serial_number']
         last_interval_start = DateUtils.iso8601(collect_to - timedelta(minutes=self._resolution_minutes))
         data = self._octopus_api.retrieve_electricity_consumption(mpan, em['serial_number'], DateUtils.iso8601(collect_from), last_interval_start)
+
         consumption = self._series_maker.make_series(data)
         self._store_em_consumption(is_export, consumption, standard_unit_rates, standing_charges, tags)
 
@@ -192,6 +235,24 @@ class OctopusToInflux:
             }, write_precision=WritePrecision.S))
         click.echo(f'Storing {len(points)} points')
         self._influx_write.write(self._influx_bucket, record=points)
+
+    def apply_intelligent_slots(self, standard_unit_rates, intelligent_slots, intelligent_low_rate_hour):
+        for t in standard_unit_rates.keys():
+            for intelligent_slot in intelligent_slots:
+                if intelligent_slot.start == t:
+                    # Use known off-peak time to find correct off-peak rate
+                    intelligent_low_time = DateUtils.iso8601(datetime.fromisoformat(t).replace(hour=intelligent_low_rate_hour, minute=0))
+                    # Check we actually have data for this day, otherwise use next day (e.g. collecting from midnight @ UTC+1 means collecting 23:00 from day before @ UTC)
+                    if intelligent_low_time not in standard_unit_rates:
+                      intelligent_low_time = DateUtils.iso8601(datetime.fromisoformat(t).replace(hour=intelligent_low_rate_hour, minute=0) + timedelta(days=1))
+                    if standard_unit_rates[t]['value_inc_vat'] != standard_unit_rates[intelligent_low_time]['value_inc_vat'] or standard_unit_rates[t]['value_exc_vat'] != standard_unit_rates[intelligent_low_time]['value_exc_vat']:
+                      print("Applying off-peak rate (" + str(standard_unit_rates[intelligent_low_time]['value_inc_vat']) + " p/kWh) to intelligent slot at " + str(t))
+                      standard_unit_rates[t]['value_inc_vat'] = standard_unit_rates[intelligent_low_time]['value_inc_vat']
+                      standard_unit_rates[t]['value_exc_vat'] = standard_unit_rates[intelligent_low_time]['value_exc_vat']
+                    intelligent_slots.remove(intelligent_slot)
+                    continue
+
+        return standard_unit_rates
 
     def _process_gmp(self, gmp, collect_from: datetime, collect_to: datetime, base_tags: dict[str, str]):
         tags = base_tags.copy()
@@ -257,6 +318,41 @@ class OctopusToInflux:
                     f = t
                     t = collect_to
         return pricing
+
+    def _process_intelligent_slots(self, mpan, base_tags: dict[str, str]):
+        dispatches = asyncio.run(self._octopus_ql_api.async_get_intelligent_dispatches(self._account_number))
+        intelligent_slots = {}
+        for r in dispatches.completed:
+            dt = r.start
+            to = r.end
+            while dt < to:
+                intelligent_slots[DateUtils.iso8601(dt)] = {
+                    'mpan': mpan,
+                    'start_time': DateUtils.iso8601(r.start),
+                    'end_time': DateUtils.iso8601(r.end),
+                }
+                dt = dt + timedelta(minutes=self._resolution_minutes)
+
+        self._store_intelligent_slots(intelligent_slots, base_tags)
+
+    def _store_intelligent_slots(self, intelligent_slots: dict, base_tags: dict[str, str]):
+        points = [
+            Point.from_dict({
+                'measurement': 'intelligent_slots',
+                'time': t,
+                'fields': {
+                    'intelligent_slot': True,
+                },
+                'tags': {
+                    'mpan': intelligent_slots[t]['mpan'],
+                    'start_time': intelligent_slots[t]['start_time'],
+                    'end_time': intelligent_slots[t]['end_time'],
+                } | base_tags,
+            }, write_precision=WritePrecision.S)
+            for t in intelligent_slots.keys()
+        ]
+        click.echo(f'Storing {len(points)} intelligent slots')
+        self._influx_write.write(self._influx_bucket, record=points)
 
     def _store_emp_pricing(self, standard_unit_rates, standing_charges, base_tags: dict[str, str]):
         self._store_pricing('electricity_pricing', standard_unit_rates, standing_charges, base_tags)

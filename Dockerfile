@@ -19,7 +19,7 @@ COPY poetry.lock pyproject.toml ./
 COPY app app
 
 RUN python -m pip install --upgrade pip poetry && \
-    poetry install --no-dev --no-root
+    poetry install --only main --no-root
 
 ######### TEST Image #########
 FROM base as test
