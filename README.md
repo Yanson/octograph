@@ -188,7 +188,6 @@ If you have not built the image locally, change the image and tag to one from [D
 
 ## Known Issues
 
-* Import meters have not been tested and are not supported.
 * The cubic meter to kWh conversion used fixed values whereas they actually fluctuate (see link below).
 
 ## Links

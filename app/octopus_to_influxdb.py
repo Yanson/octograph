@@ -148,9 +148,9 @@ class OctopusToInflux:
             if self._included_meters and em['serial_number'] not in self._included_meters:
                 click.echo(f'Skipping electricity meter {em['serial_number']} as it is not in octopus.included_meters')
             else:
-                self._process_em(emp['mpan'], em, collect_from, collect_to, standard_unit_rates, standing_charges, tags)
+                self._process_em(emp['mpan'], em, emp['is_export'], collect_from, collect_to, standard_unit_rates, standing_charges, tags)
 
-    def _process_em(self, mpan: str, em, collect_from: datetime, collect_to: datetime, standard_unit_rates, standing_charges, base_tags: dict[str, str]):
+    def _process_em(self, mpan: str, em, is_export: bool, collect_from: datetime, collect_to: datetime, standard_unit_rates, standing_charges, base_tags: dict[str, str]):
         tags = base_tags.copy()
         click.echo(f'Processing electricity meter: {em["serial_number"]}')
         if 'meter_serial_number' in self._included_tags:
@@ -158,26 +158,29 @@ class OctopusToInflux:
         last_interval_start = DateUtils.iso8601(collect_to - timedelta(minutes=self._resolution_minutes))
         data = self._octopus_api.retrieve_electricity_consumption(mpan, em['serial_number'], DateUtils.iso8601(collect_from), last_interval_start)
         consumption = self._series_maker.make_series(data)
-        self._store_em_consumption(consumption, standard_unit_rates, standing_charges, tags)
+        self._store_em_consumption(is_export, consumption, standard_unit_rates, standing_charges, tags)
 
-    def _store_em_consumption(self, consumption: dict, standard_unit_rates, standing_charges, base_tags: [str, str]):
-        self._store_consumption('electricity_consumption', consumption, standard_unit_rates, standing_charges, base_tags)
+    def _store_em_consumption(self, is_export: bool, consumption: dict, standard_unit_rates, standing_charges, base_tags: [str, str]):
+        self._store_consumption('electricity_consumption', consumption, standard_unit_rates, is_export, standing_charges, base_tags)
 
     def _store_gm_consumption(self, consumption: dict, standard_unit_rates, standing_charges, base_tags: [str, str]):
-        self._store_consumption('gas_consumption', consumption, standard_unit_rates, standing_charges, base_tags)
+        self._store_consumption('gas_consumption', consumption, standard_unit_rates, False, standing_charges, base_tags)
 
-    def _store_consumption(self, measurement: str, consumption: dict, standard_unit_rates, standing_charges, base_tags: [str, str]):
+    def _store_consumption(self, measurement: str, consumption: dict, standard_unit_rates, export_meter: bool, standing_charges, base_tags: [str, str]):
         points = []
+        net_modifier = 1.0
+        if export_meter:
+          net_modifier = -1.0
         for t, c in consumption.items():
-            usage_cost_exc_vat_pence = standard_unit_rates[t]['value_exc_vat'] * c['consumption']
-            usage_cost_inc_vat_pence = standard_unit_rates[t]['value_inc_vat'] * c['consumption']
+            usage_cost_exc_vat_pence = standard_unit_rates[t]['value_exc_vat'] * c['consumption'] * net_modifier
+            usage_cost_inc_vat_pence = standard_unit_rates[t]['value_inc_vat'] * c['consumption'] * net_modifier
             standing_charge_cost_exc_vat_pence = standing_charges[t]['value_exc_vat'] / (60 * 24 / self._resolution_minutes)
             standing_charge_cost_inc_vat_pence = standing_charges[t]['value_inc_vat'] / (60 * 24 / self._resolution_minutes)
             points.append(Point.from_dict({
                 'measurement': measurement,
                 'time': t,
                 'fields': {
-                    'usage_kwh': c['consumption'],
+                    'usage_kwh': c['consumption'] * net_modifier,
                     'usage_cost_exc_vat_pence': usage_cost_exc_vat_pence,
                     'usage_cost_inc_vat_pence': usage_cost_inc_vat_pence,
                     'standing_charge_cost_exc_vat_pence': standing_charge_cost_exc_vat_pence,
