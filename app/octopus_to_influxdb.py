@@ -103,7 +103,7 @@ class OctopusToInflux:
         tags = base_tags.copy()
         click.echo(f'Processing property: {p["address_line_1"]}, {p["postcode"]}')
         for field in ['address_line_1', 'address_line_2', 'address_line_3', 'town', 'postcode']:
-            if f'property_{field}' in self._included_tags:
+            if f'property_{field}' in self._included_tags and p[field] != '':
                 tags[f'property_{field}'] = p[field]
         if len(p['electricity_meter_points']) == 0:
             click.echo('No electricity meter points found in property')
