@@ -2,7 +2,7 @@ name: Docker Image CI
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "Yanson-intelligent_octopus"]
   pull_request:
     branches: ["main"]
 
