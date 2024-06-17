@@ -1,16 +1,9 @@
-#!/usr/bin/env python
-
-from __future__ import annotations
-
-import logging
 import json
 import aiohttp
 from datetime import (datetime, timedelta, time)
 from intelligent_dispatches import IntelligentDispatchItem, IntelligentDispatches
 from contextlib import suppress
 import ciso8601
-
-_LOGGER = logging.getLogger(__name__)
 
 intelligent_dispatches_query = '''query {{
   plannedDispatches(accountNumber: "{account_id}") {{
@@ -80,7 +73,7 @@ def as_utc(dattim: dt.datetime) -> dt.datetime:
 class OctopusEnergyApiClient:
   def __init__(self, api_key, timeout_in_seconds = 15):
     if (api_key is None):
-      raise Exception('API KEY is not set')
+      raise click.ClickException("API KEY is not set")
 
     self._api_key = api_key
     self._base_url = 'https://api.octopus.energy'
@@ -114,7 +107,7 @@ class OctopusEnergyApiClient:
           self._graphql_token = token_response_body["data"]["obtainKrakenToken"]["token"]
           self._graphql_expiration = datetime.now() + timedelta(hours=1)
         else:
-          _LOGGER.error("Failed to retrieve auth token")
+          raise click.ClickException("Failed to retrieve auth token")
 
   async def async_get_intelligent_dispatches(self, account_id: str):
     """Get the user's intelligent dispatches"""
@@ -127,7 +120,6 @@ class OctopusEnergyApiClient:
       headers = { "Authorization": f"JWT {self._graphql_token}" }
       async with client.post(url, json=payload, headers=headers) as response:
         response_body = await self.__async_read_response__(response, url)
-        _LOGGER.debug(f'async_get_intelligent_dispatches: {response_body}')
 
         if (response_body is not None and "data" in response_body):
           return IntelligentDispatches(
@@ -153,7 +145,7 @@ class OctopusEnergyApiClient:
             )
           )
         else:
-          _LOGGER.error("Failed to retrieve intelligent dispatches")
+          raise click.ClickException("Failed to retrieve intelligent dispatches")
 
     return None
 
@@ -164,25 +156,18 @@ class OctopusEnergyApiClient:
 
     if response.status >= 400:
       if response.status >= 500:
-        msg = f'DO NOT REPORT - Octopus Energy server error ({url}): {response.status}; {text}'
-        _LOGGER.debug(msg)
-        raise ServerError(msg)
+        raise click.ClickException(f'Octopus Energy server error ({url}): {response.status}; {text}')
       elif response.status not in [401, 403, 404]:
-        msg = f'Failed to send request ({url}): {response.status}; {text}'
-        _LOGGER.debug(msg)
-        raise RequestError(msg, [])
+        raise click.ClickException(f'Failed to send request ({url}): {response.status}; {text}')
       return None
 
     data_as_json = None
     try:
       data_as_json = json.loads(text)
     except:
-      raise Exception(f'Failed to extract response json: {url}; {text}')
+      raise click.ClickException(f'Failed to extract response json: {url}; {text}')
 
     if ("graphql" in url and "errors" in data_as_json):
-      msg = f'Errors in request ({url}): {data_as_json["errors"]}'
-      errors = list(map(lambda error: error["message"], data_as_json["errors"]))
-      _LOGGER.debug(msg)
-      raise RequestError(msg, errors)
+      raise click.ClickException(f'Errors in request ({url}): {data_as_json["errors"]}')
 
     return data_as_json
