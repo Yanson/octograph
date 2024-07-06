@@ -18,7 +18,7 @@ WORKDIR "/opt/$APP_NAME"
 COPY poetry.lock pyproject.toml ./
 COPY app app
 
-RUN python -m pip install --upgrade pip poetry && \
+RUN python -m pip install --no-cache-dir --upgrade pip poetry wheel && \
     poetry install --only main --no-root
 
 ######### TEST Image #########
@@ -29,6 +29,6 @@ RUN poetry run pytest -v tests/unit
 
 ######### PRODUCTION Image #########
 FROM base as production
-RUN poetry install --no-dev
+RUN poetry install --only main
 
 ENTRYPOINT ["python", "/opt/octograph/app/octopus_to_influxdb.py"]
