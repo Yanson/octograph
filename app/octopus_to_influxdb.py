@@ -10,7 +10,7 @@ from influxdb_client import InfluxDBClient
 from influxdb_client.client.write.point import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 from influxdb_client.domain.write_precision import WritePrecision
-from octopus_graphql_api_client import OctopusEnergyApiClient
+from octopus_graphql_api_client import OctopusGraphQlApiClient
 from intelligent_dispatches import IntelligentDispatchItem
 
 from app.date_utils import DateUtils
@@ -51,9 +51,13 @@ class OctopusToInflux:
             config.get('octopus', 'cache_dir', fallback='/tmp/octopus_api_cache') if config.getboolean('octopus', 'enable_cache', fallback=False) else None
         )
 
-        self._octopus_ql_api = OctopusEnergyApiClient(
-            os.getenv(config.get('octopus', 'api_key_env_var', fallback='OCTOGRAPH_OCTOPUS_API_KEY'))
-        )
+        self._intelligent_tariff_meter = config.get('octopus', 'intelligent_tariff_meter', fallback=None)
+        self._intelligent_low_rate_hour = config.getint('octopus', 'intelligent_low_rate_hour', fallback=3)
+
+        if self._intelligent_tariff_meter is not None:
+            self._octopus_ql_api = OctopusGraphQlApiClient(
+                os.getenv(config.get('octopus', 'api_key_env_var', fallback='OCTOGRAPH_OCTOPUS_API_KEY'))
+            )
 
         self._influx_bucket = config.get('influxdb', 'bucket', fallback='primary')
         influx_client = InfluxDBClient(
@@ -63,9 +67,6 @@ class OctopusToInflux:
         )
         self._influx_write = influx_client.write_api(write_options=SYNCHRONOUS)
         self._influx_query = influx_client.query_api()
-
-        self._intelligent_tariff_meter = config.get('octopus', 'intelligent_tariff_meter', fallback=None)
-        self._intelligent_low_rate_hour = config.getint('octopus', 'intelligent_low_rate_hour', fallback=3)
 
         included_meters_str = config.get('octopus', 'included_meters', fallback=None)
         self._included_meters = included_meters_str.split(',') if included_meters_str else None
@@ -181,14 +182,14 @@ class OctopusToInflux:
             standing_charges = {}
 
         if emp['mpan'] == self._intelligent_tariff_meter and not emp['is_export']:
-            click.echo(f'Checking for intelligent dispatch slots for electricity meter {emp['mpan']}')
+            click.echo(f'Checking for intelligent dispatch slots for electricity meter {emp["mpan"]}')
             intelligent_slots = self._find_intelligent_slots(collect_from, collect_to, {'mpan': emp['mpan']})
             standard_unit_rates = self.apply_intelligent_slots(standard_unit_rates, intelligent_slots, self._intelligent_low_rate_hour)
         self._store_emp_pricing(standard_unit_rates, standing_charges, tags)
 
         for em in emp['meters']:
             if self._included_meters and em['serial_number'] not in self._included_meters:
-                click.echo(f'Skipping electricity meter {em['serial_number']} as it is not in octopus.included_meters')
+                click.echo(f'Skipping electricity meter {em["serial_number"]} as it is not in octopus.included_meters')
             else:
                 self._process_em(emp['mpan'], em, emp['is_export'], collect_from, collect_to, standard_unit_rates, standing_charges, tags)
 
@@ -273,7 +274,7 @@ class OctopusToInflux:
 
         for gm in gmp['meters']:
             if self._included_meters and gm['serial_number'] not in self._included_meters:
-                click.echo(f'Skipping gas meter {gm['serial_number']} as it is not in octopus.included_meters')
+                click.echo(f'Skipping gas meter {gm["serial_number"]} as it is not in octopus.included_meters')
             else:
                 self._process_gm(gmp["mprn"], gm, collect_from, collect_to, standard_unit_rates, standing_charges, tags)
 
