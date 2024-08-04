@@ -1,9 +1,10 @@
 import json
 import aiohttp
-from datetime import (datetime, timedelta, time)
+import datetime as dt
 from intelligent_dispatches import IntelligentDispatchItem, IntelligentDispatches
 from contextlib import suppress
 import ciso8601
+import click
 
 intelligent_dispatches_query = '''query {{
   plannedDispatches(accountNumber: "{account_id}") {{
@@ -70,7 +71,7 @@ def as_utc(dattim: dt.datetime) -> dt.datetime:
 
   return dattim.astimezone(UTC)
 
-class OctopusEnergyApiClient:
+class OctopusGraphQlApiClient:
   def __init__(self, api_key, timeout_in_seconds = 15):
     if (api_key is None):
       raise click.ClickException("API KEY is not set")
@@ -90,7 +91,7 @@ class OctopusEnergyApiClient:
 
   async def async_refresh_token(self):
     """Get the user's refresh token"""
-    if (self._graphql_expiration is not None and (self._graphql_expiration - timedelta(minutes=5)) > datetime.now()):
+    if (self._graphql_expiration is not None and (self._graphql_expiration - dt.timedelta(minutes=5)) > dt.datetime.now()):
       return
 
     async with aiohttp.ClientSession(timeout=self.timeout) as client:
@@ -105,7 +106,7 @@ class OctopusEnergyApiClient:
             "token" in token_response_body["data"]["obtainKrakenToken"]):
 
           self._graphql_token = token_response_body["data"]["obtainKrakenToken"]["token"]
-          self._graphql_expiration = datetime.now() + timedelta(hours=1)
+          self._graphql_expiration = dt.datetime.now() + dt.timedelta(hours=1)
         else:
           raise click.ClickException("Failed to retrieve auth token")
 
