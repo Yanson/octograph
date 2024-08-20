@@ -1,9 +1,18 @@
 import json
 import aiohttp
 import datetime as dt
+import re
+from typing import Any
 from intelligent_dispatches import IntelligentDispatchItem, IntelligentDispatches
 from contextlib import suppress
 import click
+
+DATETIME_RE = re.compile(
+    r"(?P<year>\d{4})-(?P<month>\d{1,2})-(?P<day>\d{1,2})"
+    r"[T ](?P<hour>\d{1,2}):(?P<minute>\d{1,2})"
+    r"(?::(?P<second>\d{1,2})(?:\.(?P<microsecond>\d{1,6})\d{0,6})?)?"
+    r"(?P<tzinfo>Z|[+-]\d{2}(?::?\d{2})?)?$"
+)
 
 intelligent_dispatches_query = '''query {{
   plannedDispatches(accountNumber: "{account_id}") {{
@@ -46,7 +55,7 @@ def parse_datetime(dt_str: str) -> dt.datetime | None:
 
   tzinfo: dt.tzinfo | None = None
   if tzinfo_str == "Z":
-    tzinfo = UTC
+    tzinfo = dt.UTC
   elif tzinfo_str is not None:
     offset_mins = int(tzinfo_str[-2:]) if len(tzinfo_str) > 3 else 0
     offset_hours = int(tzinfo_str[1:3])
@@ -57,18 +66,6 @@ def parse_datetime(dt_str: str) -> dt.datetime | None:
   kws = {k: int(v) for k, v in kws.items() if v is not None}
   kws["tzinfo"] = tzinfo
   return dt.datetime(**kws)
-
-def as_utc(dattim: dt.datetime) -> dt.datetime:
-  """Return a datetime as UTC time.
-
-  Assumes datetime without tzinfo to be in the DEFAULT_TIME_ZONE.
-  """
-  if dattim.tzinfo == UTC:
-    return dattim
-  if dattim.tzinfo is None:
-    dattim = dattim.replace(tzinfo=DEFAULT_TIME_ZONE)
-
-  return dattim.astimezone(UTC)
 
 class OctopusGraphQlApiClient:
   def __init__(self, api_key, timeout_in_seconds = 15):
