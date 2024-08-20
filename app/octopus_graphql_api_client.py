@@ -3,7 +3,6 @@ import aiohttp
 import datetime as dt
 from intelligent_dispatches import IntelligentDispatchItem, IntelligentDispatches
 from contextlib import suppress
-import ciso8601
 import click
 
 intelligent_dispatches_query = '''query {{
@@ -36,7 +35,7 @@ def parse_datetime(dt_str: str) -> dt.datetime | None:
   Returns None if the input isn't well formatted.
   """
   with suppress(ValueError, IndexError):
-      return ciso8601.parse_datetime(dt_str)
+      return dt.datetime.fromisoformat(dt_str)
 
   if not (match := DATETIME_RE.match(dt_str)):
     return None
