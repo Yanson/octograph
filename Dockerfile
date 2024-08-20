@@ -15,11 +15,12 @@ ENV POETRY_VIRTUALENVS_CREATE=false \
 RUN mkdir -p "/opt/$APP_NAME"
 WORKDIR "/opt/$APP_NAME"
 
+RUN python -m pip install --no-cache-dir --upgrade pip poetry wheel
+
 COPY poetry.lock pyproject.toml ./
 COPY app app
 
-RUN python -m pip install --no-cache-dir --upgrade pip poetry wheel && \
-    poetry install --only main --no-root
+RUN poetry install --only main --no-root
 
 ######### TEST Image #########
 FROM base AS test
