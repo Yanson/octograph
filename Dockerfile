@@ -1,5 +1,5 @@
 ######### BASE Image #########
-FROM python:3.12-slim as base
+FROM python:3.12-slim AS base
 LABEL maintainer="Iain Rauch <6860163+Yanson@users.noreply.github.com>"
 
 ARG APP_NAME=octograph
@@ -15,20 +15,21 @@ ENV POETRY_VIRTUALENVS_CREATE=false \
 RUN mkdir -p "/opt/$APP_NAME"
 WORKDIR "/opt/$APP_NAME"
 
+RUN python -m pip install --no-cache-dir --upgrade pip poetry wheel
+
 COPY poetry.lock pyproject.toml ./
 COPY app app
 
-RUN python -m pip install --upgrade pip poetry && \
-    poetry install --no-dev --no-root
+RUN poetry install --only main --no-root
 
 ######### TEST Image #########
-FROM base as test
+FROM base AS test
 COPY tests tests
 RUN poetry install
 RUN poetry run pytest -v tests/unit
 
 ######### PRODUCTION Image #########
-FROM base as production
-RUN poetry install --no-dev
+FROM base AS production
+RUN poetry install --only main
 
 ENTRYPOINT ["python", "/opt/octograph/app/octopus_to_influxdb.py"]

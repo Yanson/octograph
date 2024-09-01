@@ -8,10 +8,11 @@ packages = [{ include = "app" }]
 
 [tool.poetry.dependencies]
 python = "^3.12"
-requests = "^2.31.0"
-influxdb-client = "^1.40.0"
+requests = "^2.32.0"
+influxdb-client = "^1.45.0"
 click = "^8.1"
 pytz = "^2024.1"
+aiohttp = "^3.10.5"
 
 [tool.poetry.dev-dependencies]
 parameterized = "^0.9"
