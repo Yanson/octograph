@@ -82,7 +82,12 @@ class OctopusApiClient:
         return results
 
     def retrieve_account(self, account_number: str):
-        return self._retrieve_data(f'accounts/{account_number}/')
+        account_data = self._retrieve_data(f'accounts/{account_number}/')
+        account_data['properties'] = [
+            property for property in account_data.get("properties", [])
+            if property.get("moved_out_at") is None
+        ]
+        return account_data
 
     def _retrieve_product(self, code: str):
         return self._retrieve_data(f'products/{code}/')
