@@ -136,7 +136,10 @@ class OctopusToInflux:
             self._process_intelligent_slots(self._intelligent_tariff_meter, tags)
 
         for p in account['properties']:
-            self._process_property(p, collect_from, collect_to, tags)
+            if 'moved_out_at' in p and p['moved_out_at']:
+                click.echo(f"Skipping property at {p['address_line_1']}, {p['postcode']} due to move-out date being set.")
+            else:
+                self._process_property(p, collect_from, collect_to, tags)
 
     def _process_property(self, p, collect_from: datetime, collect_to: datetime, base_tags: dict[str, str]):
         tags = base_tags.copy()
