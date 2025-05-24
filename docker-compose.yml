@@ -12,7 +12,7 @@ services:
     ports:
       - "28086:8086"
   grafana:
-    image: grafana/grafana-oss:10.2.3
+    image: grafana/grafana-oss:12.0.1
     ports:
       - "13000:3000"
     depends_on:
@@ -20,6 +20,17 @@ services:
     volumes:
     - ./grafana/provisioning:/etc/grafana/provisioning
     - ./grafana/lib/dashboards:/var/lib/grafana/dashboards
+  octograph-query:
+    image: yansonb/octograph-query:latest
+    environment:
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_ORG=monitoring
+      - INFLUXDB_BUCKET=energy-metrics
+      - INFLUXDB_TOKEN=secret_admin_token
+    ports:
+      - "18080:8080"
+    depends_on:
+      - influxdb
 
 networks:
   default:

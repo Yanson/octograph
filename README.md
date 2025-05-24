@@ -13,12 +13,18 @@ though there is very little left from the original codebase.
 ![](dashboard-electricity.png)
 ![](dashboard-gas.png)
 
+## Octograph Query
+
+See also the [Yanson/octograph-query](https://github.com/Yanson/octograph-query) sister project for visualising today's electricity pricing.
+
+<img src="https://github.com/Yanson/octograph-query/raw/main/README_example.png" width="360" alt="Example chart" />
+
 ## Docker Compose Quick Start
 
 You can get started with docker compose to give you an InfluxDB server and Grafana instance:
 
 ```shell
-docker-compose up -d
+docker compose up -d
 ```
 
 Create your own copy of the config file, and replace your `account_number` as appropriate:
@@ -26,7 +32,7 @@ Create your own copy of the config file, and replace your `account_number` as ap
 cp octograph.example.ini octograph.home.ini
 ```
 
-Run the ingestion, back-filling from the beginning of 2024:
+Run the ingestion, backfilling from the beginning of 2025:
 
 ```shell
 docker run --rm --name octograph --network octograph \
@@ -35,13 +41,20 @@ docker run --rm --name octograph --network octograph \
   -e OCTOGRAPH_OCTOPUS_API_KEY="sk_live_..." \
   yansonb/octograph:latest \
   --config-file=/etc/octograph.ini \
-  --from-date=2024-01-01
+  --from-date=2025-01-01
 ```
 
 Open the Grafana UI and login with the user / pass `admin` / `admin`.
 * http://localhost:13000/
 
-There will be one dashboard automatically installed called _"Energy Metrics"_.
+There will be one dashboard automatically installed called _"Energy Usage"_.
+* http://localhost:13000/d/energy-usage/energy-usage
+
+You can also view the [octograph-query](https://github.com/Yanson/octograph-query) visualisation of today's electricity pricing at:
+* http://localhost:18080/query?location=Home&format=html&width=800&height=400
+               
+> [!NOTE]  
+> `ocotograph-query` depends on a `location` tag which is specified in the example config file: `additional_tags = location=Home`
 
 ## Usage
 
