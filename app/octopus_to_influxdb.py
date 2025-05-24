@@ -310,7 +310,7 @@ class OctopusToInflux:
                     for r in [x for x in results if not x['payment_method'] or x['payment_method'] == self._payment_method]:
                         pricing_rows.append({
                             'tariff_code': a['tariff_code'],
-                            'valid_from': DateUtils.iso8601(max(f, datetime.fromisoformat(r['valid_from']))),
+                            'valid_from': DateUtils.iso8601(f if not r['valid_from'] else max(f, datetime.fromisoformat(r['valid_from']))),
                             'valid_to': DateUtils.iso8601(t if not r['valid_to'] else min(t, datetime.fromisoformat(r['valid_to']))),
                             'value_exc_vat': r['value_exc_vat'],
                             'value_inc_vat': r['value_inc_vat'],
