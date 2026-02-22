@@ -301,25 +301,29 @@ class OctopusToInflux:
         for a in sorted(agreements, key=lambda x: datetime.fromisoformat(x['valid_from'])):
             agreement_valid_from = datetime.fromisoformat(a['valid_from'])
             agreement_valid_to = datetime.fromisoformat(a['valid_to']) if a['valid_to'] else collect_to
-            if agreement_valid_from <= f < agreement_valid_to:
-                if agreement_valid_to < t:
-                    t = agreement_valid_to
-                agreement_rates = self._octopus_api.retrieve_tariff_pricing(a['tariff_code'], DateUtils.iso8601(f), DateUtils.iso8601(t))
+            # Check if agreement overlaps with the remaining collection period [f, t)
+            # An agreement overlaps if it starts before t and ends after f
+            if agreement_valid_from < t and agreement_valid_to > f:
+                # Determine the effective period to fetch pricing for
+                effective_from = max(f, agreement_valid_from)
+                effective_to = min(t, agreement_valid_to)
+                agreement_rates = self._octopus_api.retrieve_tariff_pricing(a['tariff_code'], DateUtils.iso8601(effective_from), DateUtils.iso8601(effective_to))
                 for component, results in agreement_rates.items():
                     pricing_rows = []
                     for r in [x for x in results if not x['payment_method'] or x['payment_method'] == self._payment_method]:
                         pricing_rows.append({
                             'tariff_code': a['tariff_code'],
-                            'valid_from': DateUtils.iso8601(f if not r['valid_from'] else max(f, datetime.fromisoformat(r['valid_from']))),
-                            'valid_to': DateUtils.iso8601(t if not r['valid_to'] else min(t, datetime.fromisoformat(r['valid_to']))),
+                            'valid_from': DateUtils.iso8601(effective_from if not r['valid_from'] else max(effective_from, datetime.fromisoformat(r['valid_from']))),
+                            'valid_to': DateUtils.iso8601(effective_to if not r['valid_to'] else min(effective_to, datetime.fromisoformat(r['valid_to']))),
                             'value_exc_vat': r['value_exc_vat'],
                             'value_inc_vat': r['value_inc_vat'],
                         })
                     if component not in pricing:
                         pricing[component] = []
                     pricing[component] += pricing_rows
-                if t < collect_to:
-                    f = t
+                # Update f to continue from the end of this agreement's effective period
+                if effective_to > f:
+                    f = effective_to
                     t = collect_to
         return pricing
 
