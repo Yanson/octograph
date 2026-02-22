@@ -1,6 +1,6 @@
 services:
   influxdb:
-    image: influxdb:2.7-alpine
+    image: influxdb:2.8-alpine
     environment:
     - DOCKER_INFLUXDB_INIT_MODE=setup
     - DOCKER_INFLUXDB_INIT_USERNAME=admin
@@ -11,8 +11,13 @@ services:
     - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=secret_admin_token
     ports:
       - "28086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
   grafana:
-    image: grafana/grafana-oss:12.1.4
+    image: grafana/grafana-oss:12.3.3
+    environment:
+    - GF_AUTH_ANONYMOUS_ENABLED=true
+    - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
     ports:
       - "13000:3000"
     depends_on:
@@ -31,6 +36,9 @@ services:
       - "18080:8080"
     depends_on:
       - influxdb
+
+volumes:
+  influxdb_data:
 
 networks:
   default:
