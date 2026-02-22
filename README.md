@@ -32,7 +32,7 @@ Create your own copy of the config file, and replace your `account_number` as ap
 cp octograph.example.ini octograph.home.ini
 ```
 
-Run the ingestion, backfilling from the beginning of 2025:
+Run the ingestion, backfilling from the beginning of 2026:
 
 ```shell
 docker run --rm --name octograph --network octograph \
@@ -41,10 +41,10 @@ docker run --rm --name octograph --network octograph \
   -e OCTOGRAPH_OCTOPUS_API_KEY="sk_live_..." \
   yansonb/octograph:latest \
   --config-file=/etc/octograph.ini \
-  --from-date=2025-01-01
+  --from-date=2026-01-01
 ```
 
-Open the Grafana UI and login with the user / pass `admin` / `admin`.
+Open the Grafana UI (you should be automatically logged in).
 * http://localhost:13000/
 
 There will be one dashboard automatically installed called _"Energy Usage"_.
@@ -55,6 +55,9 @@ You can also view the [octograph-query](https://github.com/Yanson/octograph-quer
                
 > [!NOTE]  
 > `ocotograph-query` depends on a `location` tag which is specified in the example config file: `additional_tags = location=Home`
+
+The InfluxDB UI can be accessed with user / password `admin` / `admin_password` at:
+* http://localhost:28086/
 
 ## Usage
 
