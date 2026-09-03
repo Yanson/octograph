@@ -135,7 +135,7 @@ class OctopusApiClient:
 
     @staticmethod
     def _find_links(product, tariff_code):
-        for t in ['single_register_electricity_tariffs', 'dual_register_electricity_tariffs', 'single_register_gas_tariffs']:
+        for t in ['single_register_electricity_tariffs', 'dual_register_electricity_tariffs', 'single_register_gas_tariffs', 'four_rate_ev_electricity_tariffs']:
             if t in product:
                 for variant, options in product[t].items():
                     for payment, details in options.items():
