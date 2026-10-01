@@ -45,7 +45,7 @@ class OctopusToInflux:
         self._series_maker = SeriesMaker(self._resolution_minutes)
 
         self._octopus_api = OctopusApiClient(
-            config.get('octopus', 'api_prefix', fallback='https://api.octopus.energy/v1'),
+            config.get('octopus', 'api_prefix', fallback='https://api.oegb-kraken.energy/v1'),
             os.getenv(config.get('octopus', 'api_key_env_var', fallback='OCTOGRAPH_OCTOPUS_API_KEY')),
             self._resolution_minutes,
             config.get('octopus', 'cache_dir', fallback='/tmp/octopus_api_cache') if config.getboolean('octopus', 'enable_cache', fallback=False) else None

@@ -73,7 +73,7 @@ class OctopusGraphQlApiClient:
       raise click.ClickException("API KEY is not set")
 
     self._api_key = api_key
-    self._base_url = 'https://api.octopus.energy'
+    self._base_url = 'https://api.oegb-kraken.energy'
 
     self._graphql_token = None
     self._graphql_expiration = None
