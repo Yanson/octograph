@@ -365,20 +365,23 @@ class OctopusToInflux:
         self._store_pricing('gas_pricing', standard_unit_rates, standing_charges, base_tags)
 
     def _store_pricing(self, measurement: str, standard_unit_rates, standing_charges, base_tags: dict[str, str]):
+        default_unit_rate_key = sorted(standard_unit_rates.keys())[0]
+
         points = [
             Point.from_dict({
                 'measurement': measurement,
                 'time': t,
                 'fields': {
-                    'unit_price_exc_vat_price': standard_unit_rates[t]['value_exc_vat'],
-                    'unit_price_inc_vat_price': standard_unit_rates[t]['value_inc_vat'],
+                    'unit_price_exc_vat_price': standard_unit_rates[t if t in standard_unit_rates.keys() else default_unit_rate_key]['value_exc_vat'],
+                    'unit_price_inc_vat_price': standard_unit_rates[t if t in standard_unit_rates.keys() else default_unit_rate_key]['value_inc_vat'],
                     'standing_charge_exc_vat_price': standing_charges[t]['value_exc_vat'],
                     'standing_charge_inc_vat_price': standing_charges[t]['value_inc_vat'],
                 },
-                'tags': {'tariff_code': standard_unit_rates[t]['tariff_code']} | base_tags,
+                'tags': {'tariff_code': standard_unit_rates[t if t in standard_unit_rates.keys() else default_unit_rate_key]['tariff_code']} | base_tags,
             }, write_precision=WritePrecision.S)
-            for t in standard_unit_rates.keys()
+            for t in standing_charges.keys()
         ]
+
         click.echo(f'Storing {len(points)} points')
         self._influx_write.write(self._influx_bucket, record=points)
 
