@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone, date
+from datetime import datetime, timedelta, timezone, date, time
 from math import floor
 
 from pytz import tzinfo
@@ -38,6 +38,10 @@ class DateUtils:
     def local_date(dt: datetime, tz: tzinfo) -> date:
         local_dt = dt.astimezone(tz)
         return date(local_dt.year, local_dt.month, local_dt.day)
+
+    @staticmethod
+    def start_of_local_day(dt: datetime, tz: tzinfo) -> datetime:
+        return tz.localize(datetime.combine(DateUtils.local_date(dt, tz), time()))
 
     @staticmethod
     def minutes_between(a: datetime, b: datetime) -> int:
