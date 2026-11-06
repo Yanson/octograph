@@ -83,7 +83,7 @@ As this project was primarily built to query Agile rates - which fluctuate, and 
 If you are not on an agile tariff, you should use a `--to-date` of `yesterday` (consumption is not realtime and will only be available at some point the next day).
 
 In the event consumption data for your meter is not yet available when the program is run, it can "catch up" on missing data by using the `--from-date=latest` option.
-This will look back to see when the last datapoints is available from the last 30 days and query for new consumption (and pricing) from then.
+This will look back to see when the last datapoints is available from the last 30 days and query for new consumption (and pricing) from the start of that (local) day.
 NOTE: You must back-fill some data from a fixed date before using the `latest` option. 
 
 ### Back-filling

@@ -90,6 +90,11 @@ class OctopusToInflux:
             raise click.ClickException(f'No data found for {measurement} in last 30 days - try back-filling')
         return l
 
+    def _latest_collect_from(self, measurement: str, tags: dict[str, str]) -> datetime:
+        # Collection must start on a local day boundary (as with --from-date); the partial day is re-collected and overwritten
+        next_interval = self.find_latest_date(measurement, 'usage_kwh', tags) + timedelta(minutes=self._resolution_minutes)
+        return DateUtils.start_of_local_day(next_interval, self._timezone)
+
     def _find_intelligent_slots(self, collect_from: datetime, collect_to: datetime, tags: dict[str, str]):
         field = 'intelligent_slot'
         measurement = 'intelligent_slots'
@@ -163,7 +168,7 @@ class OctopusToInflux:
             tags['electricity_mpan'] = emp["mpan"]
 
         if not collect_from:
-            collect_from = self.find_latest_date('electricity_consumption', 'usage_kwh', tags) + timedelta(minutes=self._resolution_minutes)
+            collect_from = self._latest_collect_from('electricity_consumption', tags)
         if DateUtils.minutes_between(collect_from, collect_to) < self._resolution_minutes:
             click.echo('No new data to collect for EMP')
             return
@@ -265,7 +270,7 @@ class OctopusToInflux:
             tags['gas_mprn'] = gmp["mprn"]
 
         if not collect_from:
-            collect_from = self.find_latest_date('gas_consumption', 'usage_kwh', tags) + timedelta(minutes=self._resolution_minutes)
+            collect_from = self._latest_collect_from('gas_consumption', tags)
         if DateUtils.minutes_between(collect_from, collect_to) < self._resolution_minutes:
             click.echo('No new data to collect for GMP')
             return
