@@ -62,11 +62,14 @@ class OctopusApiClient:
         session.mount("https://", adapter)
         return session
 
+    def _to_url(self, path: str):
+        # Links returned by the API are absolute and may use a different host to api_prefix
+        if parse.urlparse(path).scheme:
+            return path
+        return f'{self._api_prefix}/{path}'
+
     def _retrieve_data(self, path: str, args: dict[str, str] = MappingProxyType({})):
-        if path.startswith(self._api_prefix):
-            url = path
-        else:
-            url = f'{self._api_prefix}/{path}'
+        url = self._to_url(path)
 
         if self._cache_dir:
             os.makedirs(self._cache_dir, exist_ok=True)
