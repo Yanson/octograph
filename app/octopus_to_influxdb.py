@@ -2,7 +2,9 @@
 import os
 import asyncio
 from configparser import ConfigParser
-from datetime import datetime, date, timedelta
+from dataclasses import dataclass
+from datetime import datetime, date, timedelta, timezone
+from math import ceil, floor
 
 import click
 import pytz
@@ -25,6 +27,25 @@ RESERVED_TAG_KEYS = frozenset([
     'property_town', 'property_postcode', 'electricity_mpan', 'gas_mprn', 'meter_serial_number',
     'agreement_tariff_code', 'tariff_code', 'mpan', 'start_time', 'end_time',
 ])
+# How far back --from-date=latest looks for existing data
+LATEST_LOOKBACK = timedelta(days=30)
+
+
+class NoRecentDataError(click.ClickException):
+    pass
+
+
+@dataclass(frozen=True)
+class ActiveWindow:
+    """When the account is active at a property: from moved_in_at (inclusive) to moved_out_at (exclusive); None is unbounded."""
+    start: datetime | None = None
+    end: datetime | None = None
+
+    @staticmethod
+    def of(p: dict) -> 'ActiveWindow':
+        def parse(key):
+            return datetime.fromisoformat(p[key]) if p.get(key) else None
+        return ActiveWindow(parse('moved_in_at'), parse('moved_out_at'))
 
 
 class OctopusToInflux:
@@ -142,13 +163,92 @@ class OctopusToInflux:
                 distinct_tag_sets.append(t)
         latest = [l for l in (self._query_latest_date(measurement, field, t) for t in distinct_tag_sets) if l]
         if not latest:
-            raise click.ClickException(f'No data found for {measurement} in last 30 days - try back-filling')
+            raise NoRecentDataError(f'No data found for {measurement} in last 30 days - try back-filling')
         return max(latest)
 
-    def _latest_collect_from(self, measurement: str, tags: dict[str, str] | list[dict[str, str]]) -> datetime:
+    def _now(self) -> datetime:
+        return datetime.now(timezone.utc)
+
+    def _align_to_interval(self, dt: datetime, up: bool) -> datetime:
+        """Round to an interval boundary (counted from the start of the local day) so no partial interval is collected."""
+        day_start = DateUtils.start_of_local_day(dt, self._timezone)
+        if dt == day_start:
+            return day_start
+        if self._resolution_minutes >= 24 * 60:
+            return DateUtils.start_of_local_day(day_start + timedelta(hours=36), self._timezone) if up else day_start
+        steps = (dt - day_start) / timedelta(minutes=self._resolution_minutes)
+        return day_start + (ceil(steps) if up else floor(steps)) * timedelta(minutes=self._resolution_minutes)
+
+    def _window_bounds(self, window: ActiveWindow) -> tuple[datetime | None, datetime | None]:
+        return (self._align_to_interval(window.start, up=True) if window.start else None,
+                self._align_to_interval(window.end, up=False) if window.end else None)
+
+    def _inactive_reason(self, window: ActiveWindow, collect_from: datetime | None, collect_to: datetime) -> str | None:
+        start, end = self._window_bounds(window)
+        if start is not None and start >= collect_to:
+            return f'not yet moved in (moves in at {window.start})'
+        # With --from-date=latest the range starts at the latest existing point, which is looked up over the last 30 days
+        range_start = collect_from if collect_from else self._now() - LATEST_LOOKBACK
+        if end is not None and end <= range_start:
+            return f'moved out (at {window.end}) before the requested range'
+        if start is not None and end is not None and start >= end:
+            return f'moved in and out at the same time ({window.start})'
+        return None
+
+    def _latest_collect_from(self, measurement: str, mp_id: str, tags: list[dict[str, str]], window: ActiveWindow) -> datetime | None:
+        """Start of collection for --from-date=latest, or None if there is nothing to collect for this meter point."""
+        start, end = self._window_bounds(window)
+        try:
+            latest = self.find_latest_date(measurement, 'usage_kwh', tags)
+        except NoRecentDataError:
+            now = self._now()
+            if window.start is not None and window.start > now:
+                click.echo(f'No data found for {mp_id}: property moves in at {window.start} - skipping for this run')
+                return None
+            if window.start is not None and window.start >= now - LATEST_LOOKBACK:
+                click.echo(f'No data found for {mp_id} in last 30 days - collecting from move-in date {window.start}')
+                return start
+            raise
+        next_interval = latest + timedelta(minutes=self._resolution_minutes)
+        if end is not None and next_interval >= end:
+            click.echo(f'All data collected for {mp_id} up to move-out at {window.end}')
+            return None
         # Collection must start on a local day boundary (as with --from-date); the partial day is re-collected and overwritten
-        next_interval = self.find_latest_date(measurement, 'usage_kwh', tags) + timedelta(minutes=self._resolution_minutes)
         return DateUtils.start_of_local_day(next_interval, self._timezone)
+
+    def _meter_point_range(self, measurement: str, mp_id: str, tags: list[dict[str, str]], collect_from: datetime | None,
+                           collect_to: datetime, window: ActiveWindow) -> tuple[datetime, datetime] | None:
+        """Collection range for a meter point clamped to the property's active window, or None if there is nothing to collect."""
+        if not collect_from:
+            collect_from = self._latest_collect_from(measurement, mp_id, tags, window)
+            if collect_from is None:
+                return None
+        start, end = self._window_bounds(window)
+        if start is not None and start > collect_from:
+            click.echo(f'Collecting {mp_id} from move-in at {window.start}')
+            collect_from = start
+        if end is not None and end < collect_to:
+            click.echo(f'Collecting {mp_id} up to move-out at {window.end}')
+            collect_to = end
+        return collect_from, collect_to
+
+    def _collect_range(self, measurement: str, mp_id: str, tags: list[dict[str, str]], collect_from: datetime | None,
+                       collect_to: datetime, window: ActiveWindow) -> tuple[datetime, datetime] | None:
+        """As _meter_point_range, but a meter point without recent data is recorded as a failure instead of stopping the run."""
+        try:
+            return self._meter_point_range(measurement, mp_id, tags, collect_from, collect_to, window)
+        except NoRecentDataError as e:
+            click.echo(f'Error: meter point {mp_id}: {e.message}', err=True)
+            self._failures.append(f'{mp_id}: {e.message}')
+            return None
+
+    def _within_window(self, series: dict, window: ActiveWindow) -> dict:
+        start, end = self._window_bounds(window)
+        lo = DateUtils.iso8601(start) if start else None
+        hi = DateUtils.iso8601(end) if end else None
+        if lo is None and hi is None:
+            return series
+        return {t: v for t, v in series.items() if (lo is None or t >= lo) and (hi is None or t < hi)}
 
     def _included(self, meters) -> list:
         return [m for m in meters if not self._included_meters or m['serial_number'] in self._included_meters]
@@ -188,14 +288,15 @@ class OctopusToInflux:
 
     def collect(self, from_str: str, to_str: str):
         click.echo(f'Collecting data between {from_str} and {to_str}')
+        self._failures = []
         if from_str == 'yesterday':
-            from_str = DateUtils.yesterday_date_string(self._timezone)
+            from_str = DateUtils.yesterday_date_string(self._timezone, self._now())
         if to_str == 'yesterday':
-            to_str = DateUtils.yesterday_date_string(self._timezone)
+            to_str = DateUtils.yesterday_date_string(self._timezone, self._now())
         collect_from = None if from_str == 'latest' else DateUtils.local_midnight(date.fromisoformat(from_str), self._timezone)
 
         if to_str == 'tomorrow':
-            to_str = DateUtils.tomorrow_date_string(self._timezone)
+            to_str = DateUtils.tomorrow_date_string(self._timezone, self._now())
         collect_to = DateUtils.local_midnight(date.fromisoformat(to_str) + timedelta(days=1), self._timezone)
 
         account = self._octopus_api.retrieve_account(self._account_number)
@@ -208,12 +309,17 @@ class OctopusToInflux:
             self._process_intelligent_slots(self._intelligent_tariff_meter, self._with_identifier_tags(tags, self._intelligent_tariff_meter))
 
         for p in account['properties']:
-            if 'moved_out_at' in p and p['moved_out_at']:
-                click.echo(f"Skipping property at {p['address_line_1']}, {p['postcode']} due to move-out date being set.")
+            window = ActiveWindow.of(p)
+            reason = self._inactive_reason(window, collect_from, collect_to)
+            if reason:
+                click.echo(f"Skipping property at {p['address_line_1']}, {p['postcode']}: {reason}")
             else:
-                self._process_property(p, collect_from, collect_to, tags)
+                self._process_property(p, collect_from, collect_to, tags, window)
 
-    def _process_property(self, p, collect_from: datetime, collect_to: datetime, base_tags: dict[str, str]):
+        if self._failures:
+            raise click.ClickException(f'Could not collect {len(self._failures)} meter point(s): ' + '; '.join(self._failures))
+
+    def _process_property(self, p, collect_from: datetime, collect_to: datetime, base_tags: dict[str, str], window: ActiveWindow = ActiveWindow()):
         tags = base_tags.copy()
         click.echo(f'Processing property: {p["address_line_1"]}, {p["postcode"]}')
         for field in ['address_line_1', 'address_line_2', 'address_line_3', 'town', 'postcode']:
@@ -222,20 +328,23 @@ class OctopusToInflux:
         if len(p['electricity_meter_points']) == 0:
             click.echo('No electricity meter points found in property')
         for emp in p['electricity_meter_points']:
-            self._process_emp(emp, collect_from, collect_to, tags)
+            self._process_emp(emp, collect_from, collect_to, tags, window)
         if len(p['gas_meter_points']) == 0:
             click.echo('No gas meter points found in property')
         for emp in p['gas_meter_points']:
-            self._process_gmp(emp, collect_from, collect_to, tags)
+            self._process_gmp(emp, collect_from, collect_to, tags, window)
 
-    def _process_emp(self, emp, collect_from: datetime, collect_to: datetime, base_tags: dict[str, str]):
+    def _process_emp(self, emp, collect_from: datetime, collect_to: datetime, base_tags: dict[str, str], window: ActiveWindow = ActiveWindow()):
         click.echo(f'Processing electricity meter point: {emp["mpan"]}')
         tags = self._with_identifier_tags(base_tags, emp['mpan'])
         if 'electricity_mpan' in self._included_tags:
             tags['electricity_mpan'] = emp["mpan"]
 
-        if not collect_from:
-            collect_from = self._latest_collect_from('electricity_consumption', self._latest_lookup_tag_sets(tags, emp['meters']))
+        collect_range = self._collect_range('electricity_consumption', emp['mpan'], self._latest_lookup_tag_sets(tags, emp['meters']),
+                                            collect_from, collect_to, window)
+        if not collect_range:
+            return
+        collect_from, collect_to = collect_range
         if DateUtils.minutes_between(collect_from, collect_to) < self._resolution_minutes:
             click.echo('No new data to collect for EMP')
             return
@@ -249,9 +358,9 @@ class OctopusToInflux:
         if 'standard_unit_rates' in pricing_dict:
             standard_unit_rows += pricing_dict['standard_unit_rates']
             pass
-        standard_unit_rates = self._series_maker.make_series(standard_unit_rows)
+        standard_unit_rates = self._within_window(self._series_maker.make_series(standard_unit_rows), window)
         if 'standing_charges' in pricing_dict:
-            standing_charges = self._series_maker.make_series(pricing_dict['standing_charges'])
+            standing_charges = self._within_window(self._series_maker.make_series(pricing_dict['standing_charges']), window)
         else:
             click.echo(f'Could not find pricing for mpan: {emp["mpan"]}')
             standing_charges = {}
@@ -330,21 +439,24 @@ class OctopusToInflux:
 
         return standard_unit_rates
 
-    def _process_gmp(self, gmp, collect_from: datetime, collect_to: datetime, base_tags: dict[str, str]):
+    def _process_gmp(self, gmp, collect_from: datetime, collect_to: datetime, base_tags: dict[str, str], window: ActiveWindow = ActiveWindow()):
         click.echo(f'Processing gas meter point: {gmp["mprn"]}')
         tags = self._with_identifier_tags(base_tags, gmp['mprn'])
         if 'gas_mprn' in self._included_tags:
             tags['gas_mprn'] = gmp["mprn"]
 
-        if not collect_from:
-            collect_from = self._latest_collect_from('gas_consumption', self._latest_lookup_tag_sets(tags, gmp['meters']))
+        collect_range = self._collect_range('gas_consumption', gmp['mprn'], self._latest_lookup_tag_sets(tags, gmp['meters']),
+                                            collect_from, collect_to, window)
+        if not collect_range:
+            return
+        collect_from, collect_to = collect_range
         if DateUtils.minutes_between(collect_from, collect_to) < self._resolution_minutes:
             click.echo('No new data to collect for GMP')
             return
 
         pricing_dict = self._get_pricing(gmp['agreements'], collect_from, collect_to)
-        standard_unit_rates = self._series_maker.make_series(pricing_dict['standard_unit_rates'])
-        standing_charges = self._series_maker.make_series(pricing_dict['standing_charges'])
+        standard_unit_rates = self._within_window(self._series_maker.make_series(pricing_dict['standard_unit_rates']), window)
+        standing_charges = self._within_window(self._series_maker.make_series(pricing_dict['standing_charges']), window)
         self._store_gmp_pricing(standard_unit_rates, standing_charges, tags)
 
         for gm in gmp['meters']:

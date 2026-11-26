@@ -84,7 +84,8 @@ If you are not on an agile tariff, you should use a `--to-date` of `yesterday` (
 
 In the event consumption data for your meter is not yet available when the program is run, it can "catch up" on missing data by using the `--from-date=latest` option.
 This will look back to see when the last datapoints is available from the last 30 days and query for new consumption (and pricing) from the start of that (local) day.
-NOTE: You must back-fill some data from a fixed date before using the `latest` option. 
+NOTE: You must back-fill some data from a fixed date before using the `latest` option, unless the property was moved into within the last 30 days (see [Moving house](#example-moving-house)).
+If a meter point has no data in the last 30 days, the run reports `No data found ... - try back-filling` for it, carries on with the other meter points and then exits with an error.
 
 ### Back-filling
 
@@ -179,11 +180,18 @@ Intelligent dispatch slots use the section matching `octopus.intelligent_tariff_
 Tags derived from the account (those listed in [Available Tags](#available-tags), plus `tariff_code`, `mpan`, `start_time` and `end_time`) cannot be set in these sections.
 Tag keys keep their case. A config without any of these sections behaves exactly as before.
 
-`--from-date=latest` looks for the latest consumption using the resolved tags, so a meter point whose tags change (e.g. a new `location`) needs back-filling once from a fixed date before `latest` can be used for it.
+`--from-date=latest` looks for the latest consumption using the resolved tags, so a meter point whose tags change (e.g. a new `location`) has to be back-filled once from a fixed date before `latest` can be used for it.
+The exception is a property moved into within the last 30 days, which `latest` collects from its move-in date automatically (see below).
 
 #### Example: moving house
 
-The old property (with a move-out date set in your Octopus account) keeps the global `location`, and the new property's meter point and meter get their own:
+Each property in your Octopus account is collected only while you live there: from its `moved_in_at` (inclusive) to its `moved_out_at` (exclusive), where a missing date means no limit.
+
+* A property is skipped (with the reason logged) only if this window doesn't overlap the requested dates. This happens if it was moved out of before the range or hasn't been moved into yet.
+* Otherwise the range is cut to the window, so the old property is collected up to its move-out and the new one from its move-in, even within one run. No points are written outside the window. If a move date falls part-way through an interval, that interval is left out.
+* With `--from-date=latest`, a meter point with no data in the last 30 days is collected from its property's move-in date if that was within the last 30 days. If the move-in date is still in the future, the meter point is skipped for that run. A property you moved out of within the last 30 days is still caught up to its move-out date.
+
+The old property keeps the global `location`, and the new property's meter point and meter get their own:
 
 ```ini
 [influxdb]
@@ -191,14 +199,18 @@ additional_tags = location=Old Home
 
 [octopus]
 ; add the new meter's serial number if you use included_meters
-included_meters = <old electricity serial>,<old gas serial>,<new meter serial>
+included_meters = <old electricity serial>,<old gas serial>,<new electricity serial>,<new gas serial>
 
 [additional_tags:<new MPAN>]
+location = New Home
+
+[additional_tags:<new MPRN>]
 location = New Home
 ```
 
 Because the meter inherits from its MPAN, a separate `[additional_tags:<new meter serial>]` section is optional - add one only if the meter needs different tags from its meter point.
-Then back-fill the new property once from its move-in date (e.g. `--from-date=YYYY-MM-DD`) before going back to `--from-date=latest`.
+No manual back-fill is needed: the scheduled `--from-date=latest` run keeps collecting the old property until its move-out date and starts the new one from its move-in date.
+You only need to back-fill (with `--from-date=YYYY-MM-DD`) if a meter point has had no data for more than 30 days, for example if you add the config more than 30 days after moving in.
 
 ## Timezone Information
 

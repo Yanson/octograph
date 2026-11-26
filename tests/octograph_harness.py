@@ -67,7 +67,7 @@ OLD_PROPERTY = {
 
 NEW_PROPERTY = {
     'id': 7000001,
-    'moved_in_at': '2026-11-01T00:00:00Z',
+    'moved_in_at': '2026-10-01T00:00:00Z',
     'moved_out_at': None,
     'address_line_1': '2 NEW ROAD',
     'address_line_2': '',
@@ -79,7 +79,7 @@ NEW_PROPERTY = {
         'mpan': NEW_MPAN,
         'meters': [{'serial_number': NEW_SERIAL}],
         'agreements': [
-            {'tariff_code': 'E-1R-AGILE-24-10-01-C', 'valid_from': '2026-11-01T00:00:00Z', 'valid_to': None},
+            {'tariff_code': 'E-1R-AGILE-24-10-01-C', 'valid_from': '2026-10-01T00:00:00Z', 'valid_to': None},
         ],
         'is_export': False,
     }],
@@ -91,10 +91,16 @@ def account_before_move():
     return {'number': 'A-1234ABCD', 'properties': [copy.deepcopy(OLD_PROPERTY)]}
 
 
+def account_without_move_dates():
+    p = copy.deepcopy(OLD_PROPERTY)
+    del p['moved_in_at'], p['moved_out_at']
+    return {'number': 'A-1234ABCD', 'properties': [p]}
+
+
 def account_after_move(old_moved_out=True):
     old = copy.deepcopy(OLD_PROPERTY)
     if old_moved_out:
-        old['moved_out_at'] = '2026-11-01T00:00:00Z'
+        old['moved_out_at'] = '2026-10-01T00:00:00Z'
     return {'number': 'A-1234ABCD', 'properties': [old, copy.deepcopy(NEW_PROPERTY)]}
 
 
@@ -121,8 +127,11 @@ def _fake_consumption(serial: str, from_date: str, to_date: str):
     return rows
 
 
+NOW = datetime.fromisoformat('2026-11-26T16:00:00+00:00')
+
+
 class Harness:
-    def __init__(self, tmp_path, config_text: str, account: dict, latest=None, dispatches=None):
+    def __init__(self, tmp_path, config_text: str, account: dict, latest=None, dispatches=None, now: datetime = NOW):
         """`latest` is a callable taking a Flux query and returning the latest datetime (or None)."""
         self.points: list[str] = []
         self.queries: list[str] = []
@@ -141,6 +150,7 @@ class Harness:
             ql_cls.return_value.async_get_intelligent_dispatches = AsyncMock(
                 return_value=dispatches or IntelligentDispatches([], []))
             self.app = o2i.OctopusToInflux(str(cfg))
+        self.app._now = lambda: now
 
         api = self.app._octopus_api
         api.retrieve_account = lambda number: copy.deepcopy(account)
