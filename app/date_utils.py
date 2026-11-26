@@ -7,16 +7,16 @@ from pytz import tzinfo
 class DateUtils:
 
     @staticmethod
-    def yesterday_date_string(tz: tzinfo) -> str:
-        return (datetime.now(tz).date() - timedelta(days=1)).isoformat()
+    def yesterday_date_string(tz: tzinfo, now: datetime = None) -> str:
+        return ((now or datetime.now(tz)).astimezone(tz).date() - timedelta(days=1)).isoformat()
 
     @staticmethod
-    def today_date_string(tz: tzinfo) -> str:
-        return datetime.now(tz).date().isoformat()
+    def today_date_string(tz: tzinfo, now: datetime = None) -> str:
+        return (now or datetime.now(tz)).astimezone(tz).date().isoformat()
 
     @staticmethod
-    def tomorrow_date_string(tz: tzinfo) -> str:
-        return (datetime.now(tz).date() + timedelta(days=1)).isoformat()
+    def tomorrow_date_string(tz: tzinfo, now: datetime = None) -> str:
+        return ((now or datetime.now(tz)).astimezone(tz).date() + timedelta(days=1)).isoformat()
 
     @staticmethod
     def iso8601(dt: datetime) -> str:

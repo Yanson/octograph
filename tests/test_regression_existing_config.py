@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.octograph_harness import (Harness, PRODUCTION_CONFIG, account_after_move, account_before_move,
+from tests.octograph_harness import (Harness, PRODUCTION_CONFIG, account_after_move, account_before_move, account_without_move_dates,
                                      intelligent_dispatches, OLD_MPAN)
 
 GOLDEN = Path(__file__).parent / 'fixtures' / 'regression_existing_config.json'
@@ -23,6 +23,9 @@ SCENARIOS = {
     'after_move_latest': (PRODUCTION_CONFIG, account_after_move, 'latest', '2026-11-25'),
     'after_move_old_property_not_moved_out_latest': (PRODUCTION_CONFIG, lambda: account_after_move(old_moved_out=False), 'latest', '2026-11-25'),
     'intelligent_fixed_dates': (INTELLIGENT_CONFIG, account_before_move, '2026-11-24', '2026-11-24'),
+    'no_move_dates_fixed_dates': (PRODUCTION_CONFIG, account_without_move_dates, '2026-11-24', '2026-11-24'),
+    'no_move_dates_latest': (PRODUCTION_CONFIG, account_without_move_dates, 'latest', '2026-11-25'),
+    'moved_out_before_range_fixed_dates': (PRODUCTION_CONFIG, account_after_move, '2026-10-05', '2026-10-06'),
 }
 
 
