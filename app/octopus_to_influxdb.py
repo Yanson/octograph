@@ -18,6 +18,14 @@ from app.eco_unit_normaliser import EcoUnitNormaliser
 from app.octopus_api_client import OctopusApiClient
 from app.series_maker import SeriesMaker
 
+IDENTIFIER_TAGS_SECTION_PREFIX = 'additional_tags:'
+# Tags derived from account/meter information (or set internally) which per-identifier sections may not override
+RESERVED_TAG_KEYS = frozenset([
+    'account_number', 'property_address_line_1', 'property_address_line_2', 'property_address_line_3',
+    'property_town', 'property_postcode', 'electricity_mpan', 'gas_mprn', 'meter_serial_number',
+    'agreement_tariff_code', 'tariff_code', 'mpan', 'start_time', 'end_time',
+])
+
 
 class OctopusToInflux:
 
@@ -77,7 +85,44 @@ class OctopusToInflux:
         additional_tags_str = config.get('influxdb', 'additional_tags', fallback=None)
         self._additional_tags = dict(item.split('=') for item in additional_tags_str.split(',')) if additional_tags_str else {}
 
-    def find_latest_date(self, measurement: str, field: str, tags: dict[str, str]):
+        self._identifier_tags = self.parse_identifier_tags(config_file)
+
+    @staticmethod
+    def parse_identifier_tags(config_file) -> dict[str, dict[str, str]]:
+        """Parse optional `[additional_tags:<identifier>]` sections, keyed by MPAN, MPRN or meter serial number.
+
+        A separate case-preserving parser is used so tag keys keep their case and the parsing of
+        existing options is unaffected.
+        """
+        parser = ConfigParser(interpolation=None, default_section='octograph:no-default-section')
+        parser.optionxform = str
+        parser.read(config_file)
+        identifier_tags = {}
+        for section in parser.sections():
+            if not section.startswith(IDENTIFIER_TAGS_SECTION_PREFIX):
+                continue
+            identifier = section[len(IDENTIFIER_TAGS_SECTION_PREFIX):].strip()
+            if not identifier:
+                raise click.ClickException(f'Config section [{section}] must name an MPAN, MPRN or meter serial number')
+            if identifier in identifier_tags:
+                raise click.ClickException(f'Duplicate config section for identifier {identifier}')
+            tags = {k.strip(): v.strip() for k, v in parser.items(section)}
+            for k, v in tags.items():
+                if k in RESERVED_TAG_KEYS:
+                    raise click.ClickException(f'Config section [{section}] cannot set reserved tag "{k}"')
+                if not k or not v:
+                    raise click.ClickException(f'Config section [{section}] has an empty tag key or value')
+            identifier_tags[identifier] = tags
+        return identifier_tags
+
+    def _with_identifier_tags(self, base_tags: dict[str, str], identifier: str) -> dict[str, str]:
+        overrides = self._identifier_tags.get(identifier)
+        if not overrides:
+            return base_tags.copy()
+        click.echo(f'Applying additional tags for {identifier}: {overrides}')
+        return base_tags | overrides
+
+    def _query_latest_date(self, measurement: str, field: str, tags: dict[str, str]):
         tf = ' '.join([f' and r["{k}"] == "{v}"' for k, v in tags.items()])
         f = f'r["_measurement"] == "{measurement}" and r._field == "{field}"{tf})'
         q = f'from(bucket: "{self._influx_bucket}") |> range(start: -30d) |> filter(fn: (r) => {f} |> last()'
@@ -86,14 +131,36 @@ class OctopusToInflux:
         for table in r:
             for record in table.records:
                 l = record.values['_time'] if l is None or record.values['_time'] > l else l
-        if not l:
-            raise click.ClickException(f'No data found for {measurement} in last 30 days - try back-filling')
         return l
 
-    def _latest_collect_from(self, measurement: str, tags: dict[str, str]) -> datetime:
+    def find_latest_date(self, measurement: str, field: str, tags: dict[str, str] | list[dict[str, str]]):
+        """Latest point across the series matching any of the given tag sets (one query per distinct tag set)."""
+        tag_sets = [tags] if isinstance(tags, dict) else tags
+        distinct_tag_sets = []
+        for t in tag_sets:
+            if t not in distinct_tag_sets:
+                distinct_tag_sets.append(t)
+        latest = [l for l in (self._query_latest_date(measurement, field, t) for t in distinct_tag_sets) if l]
+        if not latest:
+            raise click.ClickException(f'No data found for {measurement} in last 30 days - try back-filling')
+        return max(latest)
+
+    def _latest_collect_from(self, measurement: str, tags: dict[str, str] | list[dict[str, str]]) -> datetime:
         # Collection must start on a local day boundary (as with --from-date); the partial day is re-collected and overwritten
         next_interval = self.find_latest_date(measurement, 'usage_kwh', tags) + timedelta(minutes=self._resolution_minutes)
         return DateUtils.start_of_local_day(next_interval, self._timezone)
+
+    def _included(self, meters) -> list:
+        return [m for m in meters if not self._included_meters or m['serial_number'] in self._included_meters]
+
+    def _latest_lookup_tag_sets(self, meter_point_tags: dict[str, str], meters) -> list[dict[str, str]]:
+        """Tag sets to search for the latest consumption of a meter point.
+
+        Consumption is stored per meter, so a meter with its own tag section writes under different tags to its
+        meter point. As before, meter_serial_number is not part of the lookup (the latest point of any meter is used).
+        """
+        tag_sets = [meter_point_tags | self._identifier_tags.get(m['serial_number'], {}) for m in self._included(meters)]
+        return tag_sets or [meter_point_tags]
 
     def _find_intelligent_slots(self, collect_from: datetime, collect_to: datetime, tags: dict[str, str]):
         field = 'intelligent_slot'
@@ -138,7 +205,7 @@ class OctopusToInflux:
 
         if self._intelligent_tariff_meter is not None:
             click.echo(f'Collecting recent intelligent slots')
-            self._process_intelligent_slots(self._intelligent_tariff_meter, tags)
+            self._process_intelligent_slots(self._intelligent_tariff_meter, self._with_identifier_tags(tags, self._intelligent_tariff_meter))
 
         for p in account['properties']:
             if 'moved_out_at' in p and p['moved_out_at']:
@@ -162,13 +229,13 @@ class OctopusToInflux:
             self._process_gmp(emp, collect_from, collect_to, tags)
 
     def _process_emp(self, emp, collect_from: datetime, collect_to: datetime, base_tags: dict[str, str]):
-        tags = base_tags.copy()
         click.echo(f'Processing electricity meter point: {emp["mpan"]}')
+        tags = self._with_identifier_tags(base_tags, emp['mpan'])
         if 'electricity_mpan' in self._included_tags:
             tags['electricity_mpan'] = emp["mpan"]
 
         if not collect_from:
-            collect_from = self._latest_collect_from('electricity_consumption', tags)
+            collect_from = self._latest_collect_from('electricity_consumption', self._latest_lookup_tag_sets(tags, emp['meters']))
         if DateUtils.minutes_between(collect_from, collect_to) < self._resolution_minutes:
             click.echo('No new data to collect for EMP')
             return
@@ -202,8 +269,8 @@ class OctopusToInflux:
                 self._process_em(emp['mpan'], em, emp['is_export'], collect_from, collect_to, standard_unit_rates, standing_charges, tags)
 
     def _process_em(self, mpan: str, em, is_export: bool, collect_from: datetime, collect_to: datetime, standard_unit_rates, standing_charges, base_tags: dict[str, str]):
-        tags = base_tags.copy()
         click.echo(f'Processing electricity meter: {em["serial_number"]}')
+        tags = self._with_identifier_tags(base_tags, em['serial_number'])
         if 'meter_serial_number' in self._included_tags:
             tags['meter_serial_number'] = em['serial_number']
         last_interval_start = DateUtils.iso8601(collect_to - timedelta(minutes=self._resolution_minutes))
@@ -264,13 +331,13 @@ class OctopusToInflux:
         return standard_unit_rates
 
     def _process_gmp(self, gmp, collect_from: datetime, collect_to: datetime, base_tags: dict[str, str]):
-        tags = base_tags.copy()
         click.echo(f'Processing gas meter point: {gmp["mprn"]}')
+        tags = self._with_identifier_tags(base_tags, gmp['mprn'])
         if 'gas_mprn' in self._included_tags:
             tags['gas_mprn'] = gmp["mprn"]
 
         if not collect_from:
-            collect_from = self._latest_collect_from('gas_consumption', tags)
+            collect_from = self._latest_collect_from('gas_consumption', self._latest_lookup_tag_sets(tags, gmp['meters']))
         if DateUtils.minutes_between(collect_from, collect_to) < self._resolution_minutes:
             click.echo('No new data to collect for GMP')
             return
@@ -287,8 +354,8 @@ class OctopusToInflux:
                 self._process_gm(gmp["mprn"], gm, collect_from, collect_to, standard_unit_rates, standing_charges, tags)
 
     def _process_gm(self, mprn: str, gm, collect_from: datetime, collect_to: datetime, standard_unit_rates, standing_charges, base_tags: dict[str, str]):
-        tags = base_tags.copy()
         click.echo(f'Processing gas meter: {gm["serial_number"]}')
+        tags = self._with_identifier_tags(base_tags, gm['serial_number'])
         if 'meter_serial_number' in self._included_tags:
             tags['meter_serial_number'] = gm["serial_number"]
         last_interval_start = DateUtils.iso8601(collect_to - timedelta(minutes=self._resolution_minutes))

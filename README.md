@@ -109,6 +109,7 @@ If you are on an intelligent tariff, you should run this script at least once ev
 |            | `token_env_var`             | Environment variable to lookup to find InfluxDB authentication token                                                              | `OCTOGRAPH_INFLUXDB_TOKEN`                          |
 |            | `included_tags`             | Tags to add to the InfluxDB data points based on account and meter information (see [below](#available-tags) for list of options) | _None_                                              |
 |            | `additional_tags`           | Comma-separated key=value list of tags to add to the InfluxDB data points (specify a `location` tag to use the sample dashboard)  | _None_                                              |
+| `additional_tags:<id>` | _any tag key_   | Optional section per MPAN, MPRN or meter serial number adding or overriding tags for that meter point / meter (see [below](#per-meter-tags)) | _None_                              |
 | `octopus`  | `account_number`            | Octopus account number (something like `A-XXXXXXXX`)                                                                              |                                                     |
 |            | `timezone`                  | Timezone to work in when converting dates and times (see timezone information [below](#timezone-information)                      | `Europe/London`                                     |
 |            | `payment_method`            | Pricing to select when there is more than one payment option for an agreement                                                     | `DIRECT_DEBIT`                                      |
@@ -156,7 +157,48 @@ additional_tags = location=Home
 ```
 
 If your account has more than one property, you can either run separate ingestions with different additional tags filter based on `octopus.included_meters`,
-or use `influxdb.included_tags` to include some of the property address information and add additional filters to the dashboard.
+use [per-meter tags](#per-meter-tags), or use `influxdb.included_tags` to include some of the property address information and add additional filters to the dashboard.
+
+### Per-meter tags
+
+Tags can be added or overridden for individual meter points and meters with one optional `[additional_tags:<identifier>]` section per identifier,
+where `<identifier>` is an electricity MPAN, a gas MPRN or a meter serial number. Each section can set any number of tags:
+
+```ini
+[additional_tags:1900000000002]
+location = New Home
+```
+
+Tags are resolved as follows (later steps win for the same key):
+
+1. The global `influxdb.additional_tags`.
+2. The section for the meter point's MPAN / MPRN. This applies to the meter point's data (`electricity_pricing`, `gas_pricing`) **and is inherited by every meter under it**.
+3. The section for the meter's serial number. This applies only to that meter's consumption (`electricity_consumption`, `gas_consumption`).
+
+Intelligent dispatch slots use the section matching `octopus.intelligent_tariff_meter`, if any.
+Tags derived from the account (those listed in [Available Tags](#available-tags), plus `tariff_code`, `mpan`, `start_time` and `end_time`) cannot be set in these sections.
+Tag keys keep their case. A config without any of these sections behaves exactly as before.
+
+`--from-date=latest` looks for the latest consumption using the resolved tags, so a meter point whose tags change (e.g. a new `location`) needs back-filling once from a fixed date before `latest` can be used for it.
+
+#### Example: moving house
+
+The old property (with a move-out date set in your Octopus account) keeps the global `location`, and the new property's meter point and meter get their own:
+
+```ini
+[influxdb]
+additional_tags = location=Old Home
+
+[octopus]
+; add the new meter's serial number if you use included_meters
+included_meters = <old electricity serial>,<old gas serial>,<new meter serial>
+
+[additional_tags:<new MPAN>]
+location = New Home
+```
+
+Because the meter inherits from its MPAN, a separate `[additional_tags:<new meter serial>]` section is optional - add one only if the meter needs different tags from its meter point.
+Then back-fill the new property once from its move-in date (e.g. `--from-date=YYYY-MM-DD`) before going back to `--from-date=latest`.
 
 ## Timezone Information
 
